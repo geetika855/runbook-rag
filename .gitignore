@@ -6,3 +6,5 @@ venv/
 *.faiss
 *.pkl
 .DS_Store
+# Generated vector index (rebuild with: python -m src.ingest)
+data/index/
