@@ -55,9 +55,20 @@ def load_index():
     return index, chunks, model
 
 
+_components = None
+
+
+def get_components():
+    """Load index/chunks/model once per process and reuse them."""
+    global _components
+    if _components is None:
+        _components = load_index()
+    return _components
+
+
 def retrieve(question: str, k: int = DEFAULT_K):
     """Return the top-k runbook chunks for a question, each with a score."""
-    index, chunks, model = load_index()
+    index, chunks, model = get_components()
     query_vec = model.encode([question], normalize_embeddings=True).astype(np.float32)
     scores, ids = index.search(query_vec, k)
     results = []
@@ -74,9 +85,12 @@ def _cite(chunk: dict) -> str:
     return f"[source: {chunk['source']}]"
 
 
-def extractive_answer(question: str, k: int = DEFAULT_K) -> str:
+def extractive_answer(
+    question: str, k: int = DEFAULT_K, results: list | None = None
+) -> str:
     """Compose a grounded answer directly from retrieved runbook sections."""
-    results = retrieve(question, k=k)
+    if results is None:
+        results = retrieve(question, k=k)
     relevant = [r for r in results if r["score"] >= MIN_SCORE]
     if not relevant:
         return (

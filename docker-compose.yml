@@ -1,0 +1,8 @@
+services:
+  api:
+    build: .
+    image: runbook-rag:latest
+    container_name: runbook-rag
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
