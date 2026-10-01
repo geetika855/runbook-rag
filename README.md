@@ -1,11 +1,11 @@
 # Runbook-RAG: Incident Response Assistant
 
-An AI-powered assistant that answers on-call questions using your team's own
-incident runbooks. Ask it "how did we fix the last inference latency spike?"
-and get a grounded, step-by-step answer — with sources, not hallucinations.
+An assistant that answers on-call questions using your team's own incident
+runbooks. Ask "how did we fix the last inference latency spike?" and get a
+grounded, step-by-step answer — with sources cited, not hallucinations.
 
 Built as an AIOps learning project: retrieval-augmented generation (RAG) over
-real DevOps runbooks, packaged as a FastAPI service with Docker and CI.
+DevOps runbooks, packaged as a FastAPI service with Docker and CI.
 
 ## How it works
 
@@ -20,43 +20,103 @@ incident question
                                        └──────────────────┘
 ```
 
-1. **Ingest** — runbooks in `data/runbooks/` are chunked and embedded.
-2. **Retrieve** — a question is embedded and matched against the FAISS index.
+1. **Ingest** — runbooks in `data/runbooks/` are split into sections, chunked
+   with overlap, and embedded with `all-MiniLM-L6-v2` into a FAISS index
+   (11 runbooks → 67 chunks).
+2. **Retrieve** — a question is embedded and matched against the index with
+   cosine similarity.
 3. **Answer** — by default, an extractive answer is composed directly from the
    retrieved runbook sections (no LLM required), citing which runbook each
-   step came from. Optionally, `--llm ollama` can synthesize with a local
-   Ollama model instead.
+   step came from. Questions with no sufficiently relevant runbook are
+   refused instead of answered. Optionally, `--llm ollama` synthesizes the
+   answer with a local Ollama model.
 
-## Quickstart
+## Setup
+
+Requires Python 3.12+.
 
 ```bash
 pip install -r requirements.txt
 
-# 1. Build the knowledge base from runbooks
+# Build the knowledge base from the runbooks (downloads the embedding model
+# from Hugging Face on first run, ~90 MB)
 python -m src.ingest
+```
 
-# 2. Ask a question from the CLI
+`requirements.txt` pins CPU-only PyTorch wheels, so this works on machines
+without a GPU.
+
+## Usage
+
+### CLI
+
+```bash
+# Ask a question (extractive answer, grounded in runbooks)
 python -m src.rag "pods are crashlooping after the latest deploy, what do I check first?"
 
-# 3. Or run the API
+# See the raw retrieved chunks and scores instead
+python -m src.rag "EKS ran out of IP addresses" --retrieve-only
+
+# Retrieve more/fewer chunks
+python -m src.rag "tls certificate expiring" -k 6
+
+# Optional: synthesize with a local Ollama model instead of extractive answering
+python -m src.rag "queue backlog is growing" --llm ollama
+```
+
+### API
+
+```bash
 uvicorn src.api:app
 ```
 
-API endpoints:
-
-| Method | Path        | Description                              |
-| ------ | ----------- | ---------------------------------------- |
-| GET    | `/health`   | liveness probe + index stats             |
-| GET    | `/runbooks` | list of indexed runbooks                 |
-| POST   | `/ask`      | ask a question, get a grounded answer    |
+| Method | Path        | Description                           |
+| ------ | ----------- | ------------------------------------- |
+| GET    | `/health`   | liveness probe + index stats          |
+| GET    | `/runbooks` | list of indexed runbooks              |
+| POST   | `/ask`      | ask a question, get a grounded answer |
 
 ```bash
 curl -X POST localhost:8000/ask \
   -H 'Content-Type: application/json' \
   -d '{"question": "pods are crashlooping after the latest deploy"}'
+```
 
-# Or run the whole thing in Docker
+The embedding model and FAISS index load once at startup and are shared
+across requests.
+
+### Docker
+
+```bash
 docker compose up --build
+# API on http://localhost:8000
+```
+
+The image builds the FAISS index at build time, so the container starts
+with zero setup. A `HEALTHCHECK` polls `/health`.
+
+### Demo
+
+```bash
+./demo.sh
+```
+
+Runs ingestion, three CLI questions (two incidents + one refused
+out-of-scope question), and the API end to end.
+
+## Testing
+
+```bash
+python -m pytest tests/ -q
+```
+
+10 tests: retrieval quality (correct runbook retrieved for EKS, CrashLoop,
+and TLS questions), out-of-scope refusal, citation presence, and API
+endpoint behavior (health stats, runbook listing, `/ask` answers, input
+validation).
+
+CI (`.github/workflows/ci.yml`) runs the test suite and builds + smoke-tests
+the Docker image on every push to `main`.
 
 ## Project layout
 
@@ -68,14 +128,16 @@ runbook-rag/
 │   ├── rag.py          # retrieval + grounded answers (+ CLI)
 │   └── api.py          # FastAPI service (GET /health, /runbooks, POST /ask)
 ├── tests/              # retrieval + API tests
+├── demo.sh             # reproducible end-to-end demo
 ├── Dockerfile          # CPU image: builds index, serves API on :8000
-└── docker-compose.yml
+├── docker-compose.yml
+└── .github/workflows/ci.yml
 ```
 
 ## Tech stack
 
 Python · FAISS · sentence-transformers · FastAPI · Uvicorn · Docker ·
-pytest
+pytest · GitHub Actions
 
 ## Why this exists
 

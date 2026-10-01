@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build the FAISS index
+        run: python -m src.ingest
+
+      - name: Run tests
+        run: python -m pytest tests/ -q
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the Docker image
+        run: docker build -t runbook-rag:ci .
+
+      - name: Smoke-test the container
+        run: |
+          docker run -d --name runbook-rag-ci -p 8000:8000 runbook-rag:ci
+          for i in $(seq 1 24); do
+            if curl -sf http://localhost:8000/health | grep -q '"status":"ok"'; then
+              echo "API is healthy"
+              break
+            fi
+            sleep 5
+          done
+          curl -sf http://localhost:8000/health
+          docker stop runbook-rag-ci
